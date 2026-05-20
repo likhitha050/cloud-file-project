@@ -2,8 +2,7 @@ import time
 import psutil
 import os
 from functools import wraps
-from experiments.log_results import log_to_csv
-
+from ..experiments.log_results import log_to_csv
 MAX_POWER_WATTS = 15.0
 IDLE_POWER_WATTS = 5.0
 
