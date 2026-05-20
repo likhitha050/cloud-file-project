@@ -11,11 +11,10 @@ from crypto import aes128, aes256, chacha20
 from otp import sha256_otp, hmac_otp, totp
 
 app = Flask(__name__, template_folder='ui/templates', static_folder='ui/static')
-
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secure_key")
 
 # ==========================================
-# 📊 CSV LOGGING (FIXED - SINGLE SOURCE)
+# 📊 CSV LOGGING
 # ==========================================
 CSV_FILE = "/tmp/results.csv"
 
@@ -26,13 +25,7 @@ def log_to_csv(action, filename, algo, extra_info=""):
         writer = csv.writer(file)
 
         if not file_exists:
-            writer.writerow([
-                "Timestamp",
-                "Action",
-                "Filename",
-                "Algorithm",
-                "Extra Info"
-            ])
+            writer.writerow(["Timestamp", "Action", "Filename", "Algorithm", "Extra Info"])
 
         writer.writerow([
             time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -43,7 +36,7 @@ def log_to_csv(action, filename, algo, extra_info=""):
         ])
 
 # ==========================================
-# 📥 DOWNLOAD CSV (ONLY ONE ROUTE - FIXED)
+# 📥 DOWNLOAD CSV
 # ==========================================
 @app.route('/download-csv')
 def download_csv():
@@ -55,11 +48,9 @@ def download_csv():
 # 📧 SENDGRID
 # ==========================================
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "noreply@example.com")
 
 def send_real_email(receiver_email, otp_code, filename, algo):
-
     if not SENDGRID_API_KEY:
         print("SENDGRID_API_KEY not set")
         return False
@@ -78,7 +69,6 @@ def send_real_email(receiver_email, otp_code, filename, algo):
 
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
-
         return 200 <= response.status_code < 300
 
     except Exception as e:
@@ -92,7 +82,7 @@ USERS = {}
 FILES_DB = {}
 
 # ==========================================
-# 📁 FOLDERS
+# 📁 STORAGE FOLDERS
 # ==========================================
 os.makedirs("storage/encrypted_files", exist_ok=True)
 os.makedirs("storage/decrypted_files", exist_ok=True)
@@ -106,10 +96,10 @@ os.makedirs("test_data", exist_ok=True)
 def index():
     return redirect(url_for('login'))
 
+# ---------------- REGISTER ----------------
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-
         username = request.form.get('username').lower()
 
         if username in USERS:
@@ -126,9 +116,9 @@ def register():
 
     return render_template('register.html')
 
+# ---------------- LOGIN ----------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-
     if request.method == 'POST':
         username = request.form['username'].lower()
         password = request.form['password']
@@ -141,16 +131,15 @@ def login():
 
     return render_template('login.html')
 
+# ---------------- DASHBOARD ----------------
 @app.route('/dashboard')
 def dashboard():
-
     if 'user' not in session:
         return redirect(url_for('login'))
 
     user = session['user']
 
     my_files = {fid: f for fid, f in FILES_DB.items() if f['owner'] == user}
-
     shared_files = {fid: f for fid, f in FILES_DB.items() if user in f['shared_with']}
 
     return render_template(
@@ -161,9 +150,9 @@ def dashboard():
         all_users=list(USERS.keys())
     )
 
+# ---------------- UPLOAD ----------------
 @app.route('/upload', methods=['POST'])
 def upload_file():
-
     if 'user' not in session:
         return redirect(url_for('login'))
 
@@ -198,12 +187,11 @@ def upload_file():
             "filename": file.filename,
             "algo": algo,
             "key": key,
-            "shared_with": {}
+            "shared_with": []   # FIXED
         }
 
         os.remove(temp_path)
 
-        # CSV LOG
         log_to_csv("UPLOAD", file.filename, algo)
 
         flash("Uploaded & encrypted!", "success")
@@ -213,6 +201,32 @@ def upload_file():
 
     return redirect(url_for('dashboard'))
 
+# ---------------- SHARE (NEW FIX) ----------------
+@app.route('/share/<file_id>', methods=['POST'])
+def share_file(file_id):
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
+    if file_id not in FILES_DB:
+        return jsonify({"error": "File not found"}), 404
+
+    file_data = FILES_DB[file_id]
+
+    # only owner can share
+    if file_data['owner'] != session['user']:
+        return jsonify({"error": "Not allowed"}), 403
+
+    target_user = request.form.get('username')
+
+    if target_user not in USERS:
+        return jsonify({"error": "User not found"}), 404
+
+    if target_user not in file_data['shared_with']:
+        file_data['shared_with'].append(target_user)
+
+    return jsonify({"message": "File shared successfully"})
+
+# ---------------- LOGOUT ----------------
 @app.route('/logout')
 def logout():
     session.pop('user', None)
