@@ -6,3 +6,4 @@ flask-cors
 flask-mail
 python-dotenv
 sendgrid
+psutil
