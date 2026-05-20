@@ -43,10 +43,11 @@ def log_to_csv(action, filename, algo, extra_info=""):
         ])
 
 # ==========================================
-# 📥 DOWNLOAD CSV
+# 📥 DOWNLOAD CSV (FIXED - SINGLE ROUTE ONLY)
 # ==========================================
 @app.route('/download-csv')
 def download_csv():
+
     if not os.path.exists(CSV_FILE):
         return "No CSV logs found yet."
 
@@ -55,7 +56,6 @@ def download_csv():
         as_attachment=True,
         download_name="cloud_vault_logs.csv"
     )
-    
 
 # ==========================================
 # 📧 SENDGRID CONFIGURATION
@@ -215,7 +215,7 @@ def upload_file():
             'filename': uploaded_file.filename,
             'algo': algorithm,
             'key': key,
-            'shared_with': {}   # username → OTP metadata
+            'shared_with': {}
         }
 
         os.remove(temp_path)
@@ -250,7 +250,6 @@ def share_file(file_id):
     if file_data['owner'] != session['user']:
         return "Not allowed", 403
 
-    # Generate OTP
     if otp_algo == "SHA-256":
         secret = sha256_otp.generate_secret()
         otp_code = sha256_otp.generate_otp(secret)
