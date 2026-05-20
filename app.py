@@ -55,6 +55,7 @@ def download_csv():
         as_attachment=True,
         download_name="cloud_vault_logs.csv"
     )
+    
 
 # ==========================================
 # 📧 SENDGRID CONFIGURATION
