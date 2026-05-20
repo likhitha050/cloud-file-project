@@ -32,6 +32,8 @@ def log_to_csv(action, filename, algo, extra_info=""):
                 "Filename",
                 "Algorithm",
                 "Extra Info"
+                "CPU (%)"
+                "Energy (J)"
             ])
 
         writer.writerow([
