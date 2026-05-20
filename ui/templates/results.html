@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Performance Results</title>
+    <style>
+        body {
+            font-family: Arial;
+            margin: 20px;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+
+        th {
+            background: #333;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+
+<h2>📊 Encryption Performance Results</h2>
+
+<table>
+    {% for row in rows %}
+        <tr>
+            {% for col in row %}
+                <td>{{ col }}</td>
+            {% endfor %}
+        </tr>
+    {% endfor %}
+</table>
+
+</body>
+</html>
