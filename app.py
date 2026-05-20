@@ -12,13 +12,10 @@ from otp import sha256_otp, hmac_otp, totp
 
 app = Flask(__name__, template_folder='ui/templates', static_folder='ui/static')
 
-app.secret_key = os.getenv(
-    "FLASK_SECRET_KEY",
-    "super_secure_key"
-)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secure_key")
 
 # ==========================================
-# 📊 CSV LOGGING SETUP (NEW)
+# 📊 CSV LOGGING (FIXED - SINGLE SOURCE)
 # ==========================================
 CSV_FILE = "/tmp/results.csv"
 
@@ -46,23 +43,23 @@ def log_to_csv(action, filename, algo, extra_info=""):
         ])
 
 # ==========================================
-# 📥 DOWNLOAD CSV ROUTE (NEW)
+# 📥 DOWNLOAD CSV (ONLY ONE ROUTE - FIXED)
 # ==========================================
-@app.route("/download-csv")
+@app.route('/download-csv')
 def download_csv():
+    if not os.path.exists(CSV_FILE):
+        return "No CSV data found yet."
     return send_file(CSV_FILE, as_attachment=True)
 
 # ==========================================
-# 📧 SENDGRID CONFIGURATION
+# 📧 SENDGRID
 # ==========================================
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
-SENDER_EMAIL = os.getenv(
-    "SENDER_EMAIL",
-    "noreply@example.com"
-)
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "noreply@example.com")
 
 def send_real_email(receiver_email, otp_code, filename, algo):
+
     if not SENDGRID_API_KEY:
         print("SENDGRID_API_KEY not set")
         return False
@@ -71,12 +68,11 @@ def send_real_email(receiver_email, otp_code, filename, algo):
         message = Mail(
             from_email=SENDER_EMAIL,
             to_emails=receiver_email,
-            subject="Secure Cloud Vault - Your OTP Code",
+            subject="Secure Cloud Vault - OTP",
             plain_text_content=(
-                f"Hello!\n\n"
-                f"A secure file '{filename}' has been shared with you.\n\n"
-                f"Your {algo} OTP is: {otp_code}\n\n"
-                f"WARNING: This code expires in 2 minutes."
+                f"File: {filename}\n"
+                f"OTP ({algo}): {otp_code}\n"
+                f"Expires in 2 minutes"
             )
         )
 
@@ -90,7 +86,7 @@ def send_real_email(receiver_email, otp_code, filename, algo):
         return False
 
 # ==========================================
-# 💾 SIMULATED DATABASE
+# 💾 DATABASE (IN MEMORY)
 # ==========================================
 USERS = {}
 FILES_DB = {}
@@ -114,29 +110,26 @@ def index():
 def register():
     if request.method == 'POST':
 
-        name = request.form.get('name')
-        email = request.form.get('email')
         username = request.form.get('username').lower()
-        password = request.form.get('password')
 
         if username in USERS:
-            flash("Username already exists!", "error")
+            flash("User exists!", "error")
         else:
             USERS[username] = {
-                "name": name,
-                "email": email,
-                "password": password
+                "name": request.form.get('name'),
+                "email": request.form.get('email'),
+                "password": request.form.get('password')
             }
 
-            flash("Account created successfully!", "success")
+            flash("Registered!", "success")
             return redirect(url_for('login'))
 
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
 
+    if request.method == 'POST':
         username = request.form['username'].lower()
         password = request.form['password']
 
@@ -144,30 +137,25 @@ def login():
             session['user'] = username
             return redirect(url_for('dashboard'))
 
-        flash("Invalid credentials!", "error")
+        flash("Invalid login", "error")
 
     return render_template('login.html')
 
 @app.route('/dashboard')
 def dashboard():
+
     if 'user' not in session:
         return redirect(url_for('login'))
 
-    current_user = session['user']
+    user = session['user']
 
-    my_files = {
-        fid: data for fid, data in FILES_DB.items()
-        if data['owner'] == current_user
-    }
+    my_files = {fid: f for fid, f in FILES_DB.items() if f['owner'] == user}
 
-    shared_files = {
-        fid: data for fid, data in FILES_DB.items()
-        if current_user in data['shared_with']
-    }
+    shared_files = {fid: f for fid, f in FILES_DB.items() if user in f['shared_with']}
 
     return render_template(
         'dashboard.html',
-        username=current_user,
+        username=user,
         my_files=my_files,
         shared_files=shared_files,
         all_users=list(USERS.keys())
@@ -175,110 +163,63 @@ def dashboard():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+
     if 'user' not in session:
         return redirect(url_for('login'))
 
-    uploaded_file = request.files.get('file')
-    algorithm = request.form.get('algorithm')
+    file = request.files.get('file')
+    algo = request.form.get('algorithm')
 
-    if not uploaded_file or uploaded_file.filename == '':
-        flash("No file selected!", "error")
+    if not file or file.filename == '':
+        flash("No file!", "error")
         return redirect(url_for('dashboard'))
 
-    temp_path = f"test_data/temp_{uploaded_file.filename}"
-    uploaded_file.save(temp_path)
+    temp_path = f"test_data/temp_{file.filename}"
+    file.save(temp_path)
 
     file_id = str(uuid.uuid4())[:8]
-
-    encrypted_path = f"storage/encrypted_files/locked_{file_id}.enc"
+    enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
 
     try:
-        if algorithm == "AES-128":
+        if algo == "AES-128":
             key = aes128.generate_aes128_key()
-            aes128.encrypt_file(temp_path, encrypted_path, key)
+            aes128.encrypt_file(temp_path, enc_path, key)
 
-        elif algorithm == "AES-256":
+        elif algo == "AES-256":
             key = aes256.generate_aes256_key()
-            aes256.encrypt_file(temp_path, encrypted_path, key)
+            aes256.encrypt_file(temp_path, enc_path, key)
 
-        elif algorithm == "ChaCha20":
+        elif algo == "ChaCha20":
             key = chacha20.generate_chacha20_key()
-            chacha20.encrypt_file(temp_path, encrypted_path, key)
+            chacha20.encrypt_file(temp_path, enc_path, key)
 
         FILES_DB[file_id] = {
-            'owner': session['user'],
-            'filename': uploaded_file.filename,
-            'algo': algorithm,
-            'key': key,
-            'shared_with': {}
+            "owner": session['user'],
+            "filename": file.filename,
+            "algo": algo,
+            "key": key,
+            "shared_with": {}
         }
 
         os.remove(temp_path)
 
-        # ✅ CSV LOG
-        log_to_csv("UPLOAD", uploaded_file.filename, algorithm)
+        # CSV LOG
+        log_to_csv("UPLOAD", file.filename, algo)
 
-        flash(f"File encrypted with {algorithm} and stored.", "success")
+        flash("Uploaded & encrypted!", "success")
 
     except Exception as e:
-        flash(f"Encryption error: {e}", "error")
+        flash(str(e), "error")
 
     return redirect(url_for('dashboard'))
 
-@app.route('/share/<file_id>', methods=['POST'])
-def share_file(file_id):
-    if 'user' not in session:
-        return redirect(url_for('login'))
-
-    target_username = request.form.get('share_user')
-    otp_algo = request.form.get('otp_algo')
-
-    if file_id in FILES_DB and target_username in USERS and otp_algo:
-
-        if otp_algo == "SHA-256":
-            secret = sha256_otp.generate_secret()
-            otp_code = sha256_otp.generate_otp(secret)
-
-        elif otp_algo == "HMAC":
-            secret = hmac_otp.generate_hmac_secret()
-            otp_code = hmac_otp.generate_otp(secret, counter=1)
-
-        elif otp_algo == "TOTP":
-            secret = totp.generate_totp_secret()
-            otp_code = totp.generate_otp(secret)
-
-        FILES_DB[file_id]['shared_with'][target_username] = {
-            'secret': secret,
-            'algo': otp_algo,
-            'timestamp': time.time()
-        }
-
-        target_email = USERS[target_username]['email']
-        filename = FILES_DB[file_id]['filename']
-
-        email_sent = send_real_email(
-            target_email,
-            otp_code,
-            filename,
-            otp_algo
-        )
-
-        # ✅ CSV LOG
-        log_to_csv("SHARE", filename, otp_algo, f"to {target_username}")
-
-        if email_sent:
-            flash("File shared successfully!", "success")
-        else:
-            flash("Email failed!", "error")
-
-    return redirect(url_for('dashboard'))
-
-@app.route('/download-csv')
-def download_csv():
-    return send_file(CSV_FILE, as_attachment=True)
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect(url_for('login'))
 
 # ==========================================
-# RUN
+# RUN APP
 # ==========================================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
