@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, jsonify
 import os
 import uuid
 import time
@@ -11,6 +11,9 @@ from sendgrid.helpers.mail import Mail
 from crypto import aes128, aes256, chacha20
 from otp import sha256_otp, hmac_otp, totp
 
+# ==========================================
+# FLASK CONFIG
+# ==========================================
 app = Flask(
     __name__,
     template_folder='ui/templates',
@@ -23,7 +26,7 @@ app.secret_key = os.getenv(
 )
 
 # ==========================================
-# 📁 FOLDERS
+# CREATE FOLDERS
 # ==========================================
 os.makedirs("storage/encrypted_files", exist_ok=True)
 os.makedirs("storage/decrypted_files", exist_ok=True)
@@ -31,12 +34,12 @@ os.makedirs("test_data", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 
 # ==========================================
-# 📊 CSV CONFIG
+# CSV FILE
 # ==========================================
 CSV_FILE = "logs/results.csv"
 
 # ==========================================
-# 📧 SENDGRID CONFIG
+# SENDGRID
 # ==========================================
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
@@ -46,13 +49,13 @@ SENDER_EMAIL = os.getenv(
 )
 
 # ==========================================
-# 💾 IN-MEMORY DATABASE
+# DATABASE
 # ==========================================
 USERS = {}
 FILES_DB = {}
 
 # ==========================================
-# ⚡ ENERGY CALCULATION
+# ENERGY CALCULATION
 # ==========================================
 MAX_POWER_WATTS = 15.0
 
@@ -69,7 +72,7 @@ def calculate_energy(cpu_percent, exec_time):
 
 
 # ==========================================
-# 📊 LOG TO CSV
+# LOG TO CSV
 # ==========================================
 def log_to_csv(
     action,
@@ -94,7 +97,7 @@ def log_to_csv(
 
         writer = csv.writer(file)
 
-        # Write header only once
+        # HEADER
         if not file_exists:
 
             writer.writerow([
@@ -110,6 +113,7 @@ def log_to_csv(
                 "Extra Info"
             ])
 
+        # DATA ROW
         writer.writerow([
             time.strftime("%Y-%m-%d %H:%M:%S"),
             action,
@@ -123,15 +127,26 @@ def log_to_csv(
             extra_info
         ])
 
-    print("✅ Metrics Saved")
+    # TERMINAL OUTPUT
+    print(
+        f"{algorithm} | {action} | "
+        f"Size: {file_size_mb} MB | "
+        f"Time: {exec_time:.6f}s | "
+        f"CPU: {cpu_percent:.2f}% | "
+        f"RAM: {ram_usage_mb:.2f} MB | "
+        f"Energy: {energy:.6f} J"
+    )
 
 
 # ==========================================
-# 📊 MEASURE SYSTEM METRICS
+# MEASURE SYSTEM METRICS
 # ==========================================
 def measure_metrics(start_time):
 
     process = psutil.Process(os.getpid())
+
+    # PRIME CPU
+    process.cpu_percent(interval=None)
 
     end_time = time.perf_counter()
 
@@ -158,7 +173,7 @@ def measure_metrics(start_time):
 
 
 # ==========================================
-# 📧 SEND OTP EMAIL
+# SEND EMAIL
 # ==========================================
 def send_real_email(
     receiver_email,
@@ -203,9 +218,8 @@ def send_real_email(
 
 
 # ==========================================
-# 🌐 ROUTES
+# HOME
 # ==========================================
-
 @app.route('/')
 def index():
 
@@ -359,9 +373,7 @@ def upload_file():
 
     try:
 
-        # ==================================
         # ENCRYPTION
-        # ==================================
         if algorithm == "AES-128":
 
             key = aes128.generate_aes128_key()
@@ -392,9 +404,7 @@ def upload_file():
                 key
             )
 
-        # ==================================
-        # FILE DATABASE
-        # ==================================
+        # DATABASE
         FILES_DB[file_id] = {
             'owner': session['user'],
             'filename': uploaded_file.filename,
@@ -403,9 +413,7 @@ def upload_file():
             'shared_with': {}
         }
 
-        # ==================================
         # METRICS
-        # ==================================
         file_size_mb = (
             os.path.getsize(encrypted_path)
             / (1024 * 1024)
@@ -426,7 +434,8 @@ def upload_file():
             exec_time=exec_time,
             cpu_percent=cpu_percent,
             ram_usage_mb=ram_usage_mb,
-            energy=energy
+            energy=energy,
+            extra_info="File encrypted"
         )
 
         os.remove(temp_path)
@@ -467,9 +476,9 @@ def share_file(file_id):
     if file_data['owner'] != session['user']:
         return "Not allowed", 403
 
-    # ======================================
-    # OTP GENERATION
-    # ======================================
+    start_time = time.perf_counter()
+
+    # OTP
     if otp_algo == "SHA-256":
 
         secret = sha256_otp.generate_secret()
@@ -491,9 +500,7 @@ def share_file(file_id):
 
         otp_code = totp.generate_otp(secret)
 
-    # ======================================
-    # SAVE SHARE INFO
-    # ======================================
+    # SAVE SHARE
     file_data['shared_with'][target_username] = {
         "secret": secret,
         "algo": otp_algo,
@@ -511,18 +518,23 @@ def share_file(file_id):
         otp_algo
     )
 
-    # ======================================
-    # LOG SHARE
-    # ======================================
+    # METRICS
+    (
+        exec_time,
+        cpu_percent,
+        ram_usage_mb,
+        energy
+    ) = measure_metrics(start_time)
+
     log_to_csv(
         action="SHARE",
         filename=filename,
         algorithm=otp_algo,
         file_size_mb="N/A",
-        exec_time=0,
-        cpu_percent=0,
-        ram_usage_mb=0,
-        energy=0,
+        exec_time=exec_time,
+        cpu_percent=cpu_percent,
+        ram_usage_mb=ram_usage_mb,
+        energy=energy,
         extra_info=f"Shared to {target_username}"
     )
 
@@ -583,9 +595,7 @@ def verify_otp(file_id):
 
         secret = share_data['secret']
 
-        # ==================================
         # VERIFY OTP
-        # ==================================
         if algo == "SHA-256":
 
             valid = sha256_otp.verify_otp(
@@ -610,6 +620,8 @@ def verify_otp(file_id):
 
         if valid:
 
+            start_time = time.perf_counter()
+
             enc_path = (
                 f"storage/encrypted_files/"
                 f"locked_{file_id}.enc"
@@ -624,9 +636,7 @@ def verify_otp(file_id):
 
             crypt = file_data['algo']
 
-            # ==============================
             # DECRYPT
-            # ==============================
             if crypt == "AES-128":
 
                 aes128.decrypt_file(
@@ -651,6 +661,31 @@ def verify_otp(file_id):
                     key
                 )
 
+            # METRICS
+            file_size_mb = (
+                os.path.getsize(enc_path)
+                / (1024 * 1024)
+            )
+
+            (
+                exec_time,
+                cpu_percent,
+                ram_usage_mb,
+                energy
+            ) = measure_metrics(start_time)
+
+            log_to_csv(
+                action="DECRYPT",
+                filename=file_data['filename'],
+                algorithm=crypt,
+                file_size_mb=round(file_size_mb, 6),
+                exec_time=exec_time,
+                cpu_percent=cpu_percent,
+                ram_usage_mb=ram_usage_mb,
+                energy=energy,
+                extra_info=f"Decrypted by {current_user}"
+            )
+
             del file_data['shared_with'][current_user]
 
             return send_file(
@@ -668,7 +703,7 @@ def verify_otp(file_id):
 
 
 # ==========================================
-# METRICS DASHBOARD
+# METRICS PAGE
 # ==========================================
 @app.route('/metrics')
 def metrics():
@@ -692,6 +727,30 @@ def metrics():
         'metrics.html',
         metrics=metrics_data
     )
+
+
+# ==========================================
+# API METRICS
+# ==========================================
+@app.route('/api/metrics')
+def api_metrics():
+
+    metrics_data = []
+
+    if os.path.exists(CSV_FILE):
+
+        with open(
+            CSV_FILE,
+            mode="r",
+            encoding="utf-8"
+        ) as file:
+
+            reader = csv.DictReader(file)
+
+            for row in reader:
+                metrics_data.append(row)
+
+    return jsonify(metrics_data)
 
 
 # ==========================================
