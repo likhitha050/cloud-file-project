@@ -4,6 +4,13 @@ import uuid
 import time
 import csv
 
+# Security Imports
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# Database Imports
+from pymongo import MongoClient
+import certifi
+
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
@@ -13,6 +20,27 @@ from otp import sha256_otp, hmac_otp, totp
 app = Flask(__name__, template_folder='ui/templates', static_folder='ui/static')
 
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secure_key")
+
+# ==========================================
+# 🗄️ MONGODB CONFIGURATION
+# ==========================================
+
+MONGO_URI = os.getenv("MONGO_URI")
+
+if not MONGO_URI:
+    print("WARNING: MONGO_URI environment variable is not set!")
+
+try:
+    # Use certifi to prevent SSL handshake errors on Render
+    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+    db = client.get_database("secure_cloud_vault")
+    
+    # Collections
+    users_col = db.users
+    files_col = db.files
+    print("Successfully connected to MongoDB Atlas.")
+except Exception as e:
+    print(f"Failed to connect to MongoDB Atlas: {e}")
 
 # ==========================================
 # 📊 CSV CONFIG
@@ -51,7 +79,7 @@ def log_to_csv(action, filename, algo, extra_info=""):
 def download_csv():
 
     if not os.path.exists(CSV_FILE):
-        return "No CSV logs found yet."
+        return ("No CSV logs found yet.",404)
 
     return send_file(
         CSV_FILE,
@@ -93,12 +121,6 @@ def send_real_email(receiver_email, otp_code, filename, algo):
     except Exception as e:
         print(e)
         return False
-
-# ==========================================
-# 💾 IN-MEMORY DATABASE
-# ==========================================
-USERS = {}
-FILES_DB = {}
 
 # ==========================================
 # 📁 STORAGE FOLDERS
@@ -354,7 +376,24 @@ def logout():
     return redirect(url_for('login'))
 
 # ==========================================
+# ADMIN USERS
+# ==========================================
+
+@app.route('/admin/users')
+def admin_view_users():
+    # Fetch all users but hide their hashed passwords from the API output
+    all_users = users_col.find({}, {"_id": 0, "password": 0})
+    
+    user_dict = {}
+    for u in all_users:
+        username = u.pop("username")
+        user_dict[username] = u
+        
+    return jsonify(user_dict)
+
+# ==========================================
 # RUN
 # ==========================================
 if __name__ == '__main__':
+     print("Starting Secure Cloud Server...")
     app.run(host='0.0.0.0', port=5000, debug=False)
