@@ -240,6 +240,47 @@ def upload_file():
     return redirect(url_for('dashboard'))
 
 # ==========================================
+# DELETE FILE
+# ==========================================
+
+@app.route('/delete_file/<file_id>', methods=['POST'])
+def delete_file(file_id):
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
+    current_user = session['user']
+
+    # Fetch the file to ensure it exists and belongs to the logged-in user
+    file_data = files_col.find_one({"file_id": file_id})
+
+    if not file_data:
+        flash("File not found.", "error")
+        return redirect(url_for('dashboard'))
+
+    # Security Check: Ensure the user trying to delete is the actual owner
+    if file_data['owner'] != current_user:
+        flash("Permission denied. You do not own this file.", "error")
+        return redirect(url_for('dashboard'))
+
+    try:
+        # 1. Delete the physical encrypted file from Render storage
+        # This matches the path format you used in your upload route
+        enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
+        if os.path.exists(enc_path):
+            os.remove(enc_path)
+
+        # 2. Delete the file record from MongoDB Atlas
+        files_col.delete_one({"file_id": file_id})
+
+        flash(f"File '{file_data['filename']}' successfully deleted.", "success")
+
+    except Exception as e:
+        print(f"Error deleting file: {e}")
+        flash(f"An error occurred while deleting: {e}", "error")
+
+    return redirect(url_for('dashboard'))
+
+# ==========================================
 # SHARE FILE
 # ==========================================
 
