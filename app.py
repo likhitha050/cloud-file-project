@@ -395,5 +395,5 @@ def admin_view_users():
 # RUN
 # ==========================================
 if __name__ == '__main__':
-     print("Starting Secure Cloud Server...")
+    print("Starting Secure Cloud Server...")
     app.run(host='0.0.0.0', port=5000, debug=False)
