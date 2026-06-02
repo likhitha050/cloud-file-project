@@ -2,24 +2,27 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 import os
 import uuid
 import time
-import csv
 
-# Security Imports
+# 🔒 Security Imports
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Database Imports
+# 🗄️ Database Imports
 from pymongo import MongoClient
 import certifi
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
+# Your custom encryption/OTP modules
 from crypto import aes128, aes256, chacha20
 from otp import sha256_otp, hmac_otp, totp
 
 app = Flask(__name__, template_folder='ui/templates', static_folder='ui/static')
 
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secure_key")
+app.secret_key = os.getenv(
+    "FLASK_SECRET_KEY",
+    "super_secure_key"
+)
 
 # ==========================================
 # 🗄️ MONGODB CONFIGURATION
@@ -42,60 +45,16 @@ try:
 except Exception as e:
     print(f"Failed to connect to MongoDB Atlas: {e}")
 
-# ==========================================
-# 📊 CSV CONFIG
-# ==========================================
-CSV_FILE = "/tmp/results.csv"
-
-def log_to_csv(action, filename, algo, extra_info=""):
-    file_exists = os.path.isfile(CSV_FILE)
-
-    with open(CSV_FILE, mode="a", newline="") as file:
-        writer = csv.writer(file)
-
-        if not file_exists:
-            writer.writerow([
-                "Timestamp",
-                "Action",
-                "Filename",
-                "Algorithm",
-                "Extra Info",
-                "CPU (%)",
-                "Energy (J)"
-            ])
-
-        writer.writerow([
-            time.strftime("%Y-%m-%d %H:%M:%S"),
-            action,
-            filename,
-            algo,
-            extra_info
-        ])
-
-# ==========================================
-# 📥 DOWNLOAD CSV (FIXED - SINGLE ROUTE ONLY)
-# ==========================================
-@app.route('/download-csv')
-def download_csv():
-
-    if not os.path.exists(CSV_FILE):
-        return ("No CSV logs found yet.",404)
-
-    return send_file(
-        CSV_FILE,
-        as_attachment=True,
-        download_name="cloud_vault_logs.csv"
-    )
 
 # ==========================================
 # 📧 SENDGRID CONFIGURATION
 # ==========================================
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "noreply@example.com")
 
 def send_real_email(receiver_email, otp_code, filename, algo):
-
+    """Sends OTP using SendGrid API."""
     if not SENDGRID_API_KEY:
         print("SENDGRID_API_KEY not set")
         return False
@@ -109,25 +68,33 @@ def send_real_email(receiver_email, otp_code, filename, algo):
                 f"Hello!\n\n"
                 f"A secure file '{filename}' has been shared with you.\n\n"
                 f"Your {algo} OTP is: {otp_code}\n\n"
-                f"This code expires in 2 minutes."
+                f"WARNING: This code expires in 2 minutes."
             )
         )
 
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
 
-        return 200 <= response.status_code < 300
+        if 200 <= response.status_code < 300:
+            print(f"Email sent successfully to {receiver_email}")
+            return True
+        else:
+            print(f"SendGrid Error: {response.status_code}")
+            return False
 
     except Exception as e:
-        print(e)
+        import traceback
+        print(traceback.format_exc())
         return False
 
 # ==========================================
-# 📁 STORAGE FOLDERS
+# 📁 CREATE REQUIRED FOLDERS
 # ==========================================
+
 os.makedirs("storage/encrypted_files", exist_ok=True)
 os.makedirs("storage/decrypted_files", exist_ok=True)
 os.makedirs("test_data", exist_ok=True)
+os.makedirs("results", exist_ok=True)
 
 # ==========================================
 # 🌐 ROUTES
@@ -137,44 +104,63 @@ os.makedirs("test_data", exist_ok=True)
 def index():
     return redirect(url_for('login'))
 
-# ---------------- REGISTER ----------------
+# ==========================================
+# REGISTER
+# ==========================================
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-
+        name = request.form.get('name')
+        email = request.form.get('email')
         username = request.form.get('username').lower()
+        password = request.form.get('password')
 
-        if username in USERS:
+        # Check if user already exists in MongoDB
+        if users_col.find_one({"username": username}):
             flash("Username already exists!", "error")
         else:
-            USERS[username] = {
-                "name": request.form.get('name'),
-                "email": request.form.get('email'),
-                "password": request.form.get('password')
-            }
+            # 🔒 Hash the password before saving it to the database
+            hashed_password = generate_password_hash(password)
 
-            flash("Account created!", "success")
+            # Insert new user into MongoDB
+            users_col.insert_one({
+                "username": username,
+                "name": name,
+                "email": email,
+                "password": hashed_password # Save the hash, NOT the raw password
+            })
+            flash("Account created successfully!", "success")
             return redirect(url_for('login'))
 
     return render_template('register.html')
 
-# ---------------- LOGIN ----------------
+# ==========================================
+# LOGIN
+# ==========================================
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-
         username = request.form['username'].lower()
         password = request.form['password']
 
-        if username in USERS and USERS[username]['password'] == password:
+        # Fetch user from MongoDB
+        user = users_col.find_one({"username": username})
+
+        # 🔒 Check if user exists AND if the input password matches the stored hash
+        if user and check_password_hash(user['password'], password):
             session['user'] = username
             return redirect(url_for('dashboard'))
-
-        flash("Invalid credentials!", "error")
+        else:
+            flash("Invalid credentials!", "error")
 
     return render_template('login.html')
 
-# ---------------- DASHBOARD ----------------
+# ==========================================
+# DASHBOARD
+# ==========================================
+
 @app.route('/dashboard')
 def dashboard():
     if 'user' not in session:
@@ -182,27 +168,30 @@ def dashboard():
 
     current_user = session['user']
 
-    my_files = {
-        fid: data
-        for fid, data in FILES_DB.items()
-        if data['owner'] == current_user
-    }
+    # Fetch files owned by the current user
+    my_files_cursor = files_col.find({"owner": current_user})
+    my_files = {f["file_id"]: f for f in my_files_cursor}
 
-    shared_files = {
-        fid: data
-        for fid, data in FILES_DB.items()
-        if current_user in data['shared_with']
-    }
+    # Fetch files shared with the current user
+    shared_files_cursor = files_col.find({f"shared_with.{current_user}": {"$exists": True}})
+    shared_files = {f["file_id"]: f for f in shared_files_cursor}
+
+    # Fetch all usernames for the sharing dropdown
+    all_users_cursor = users_col.find({}, {"username": 1})
+    all_users = [u["username"] for u in all_users_cursor]
 
     return render_template(
         'dashboard.html',
         username=current_user,
         my_files=my_files,
         shared_files=shared_files,
-        all_users=list(USERS.keys())
+        all_users=all_users
     )
 
-# ---------------- UPLOAD ----------------
+# ==========================================
+# FILE UPLOAD
+# ==========================================
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'user' not in session:
@@ -225,155 +214,158 @@ def upload_file():
         if algorithm == "AES-128":
             key = aes128.generate_aes128_key()
             aes128.encrypt_file(temp_path, encrypted_path, key)
-
         elif algorithm == "AES-256":
             key = aes256.generate_aes256_key()
             aes256.encrypt_file(temp_path, encrypted_path, key)
-
         elif algorithm == "ChaCha20":
             key = chacha20.generate_chacha20_key()
             chacha20.encrypt_file(temp_path, encrypted_path, key)
 
-        FILES_DB[file_id] = {
+        # Store file metadata in MongoDB
+        files_col.insert_one({
+            'file_id': file_id,
             'owner': session['user'],
             'filename': uploaded_file.filename,
             'algo': algorithm,
-            'key': key,
+            'key': key, 
             'shared_with': {}
-        }
+        })
 
         os.remove(temp_path)
-
-        log_to_csv("UPLOAD", uploaded_file.filename, algorithm)
-
-        flash("File uploaded & encrypted!", "success")
+        flash(f"File encrypted with {algorithm} and stored.", "success")
 
     except Exception as e:
-        flash(f"Error: {e}", "error")
+        flash(f"Encryption error: {e}", "error")
 
     return redirect(url_for('dashboard'))
 
-# ---------------- SHARE ----------------
+# ==========================================
+# SHARE FILE
+# ==========================================
+
 @app.route('/share/<file_id>', methods=['POST'])
 def share_file(file_id):
-
     if 'user' not in session:
         return redirect(url_for('login'))
 
     target_username = request.form.get('share_user')
     otp_algo = request.form.get('otp_algo')
 
-    if file_id not in FILES_DB:
-        return "File not found", 404
+    # Verify file and target user exist in DB
+    file_data = files_col.find_one({"file_id": file_id})
+    target_user_data = users_col.find_one({"username": target_username})
 
-    if target_username not in USERS:
-        return "User not found", 404
+    if file_data and target_user_data and otp_algo:
+        if otp_algo == "SHA-256":
+            secret = sha256_otp.generate_secret()
+            otp_code = sha256_otp.generate_otp(secret)
+        elif otp_algo == "HMAC":
+            secret = hmac_otp.generate_hmac_secret()
+            otp_code = hmac_otp.generate_otp(secret, counter=1)
+        elif otp_algo == "TOTP":
+            secret = totp.generate_totp_secret()
+            otp_code = totp.generate_otp(secret)
 
-    file_data = FILES_DB[file_id]
+        # Update MongoDB with the share details
+        files_col.update_one(
+            {"file_id": file_id},
+            {"$set": {
+                f"shared_with.{target_username}": {
+                    'secret': secret,
+                    'algo': otp_algo,
+                    'timestamp': time.time()
+                }
+            }}
+        )
 
-    if file_data['owner'] != session['user']:
-        return "Not allowed", 403
+        target_email = target_user_data['email']
+        filename = file_data['filename']
 
-    if otp_algo == "SHA-256":
-        secret = sha256_otp.generate_secret()
-        otp_code = sha256_otp.generate_otp(secret)
+        print(f"Attempting to send {otp_algo} email to {target_email}...")
+        
+        email_sent = send_real_email(target_email, otp_code, filename, otp_algo)
 
-    elif otp_algo == "HMAC":
-        secret = hmac_otp.generate_hmac_secret()
-        otp_code = hmac_otp.generate_otp(secret, counter=1)
-
-    elif otp_algo == "TOTP":
-        secret = totp.generate_totp_secret()
-        otp_code = totp.generate_otp(secret)
-
-    file_data['shared_with'][target_username] = {
-        "secret": secret,
-        "algo": otp_algo,
-        "timestamp": time.time()
-    }
-
-    email = USERS[target_username]['email']
-    filename = file_data['filename']
-
-    send_real_email(email, otp_code, filename, otp_algo)
-
-    log_to_csv("SHARE", filename, otp_algo, f"to {target_username}")
-
-    flash(f"Shared with {target_username}. OTP sent via email.", "success")
+        if email_sent:
+            flash(f"File shared! A 2-minute {otp_algo} OTP has been emailed to {target_email}.", "success")
+        else:
+            flash("Email sending failed.", "error")
 
     return redirect(url_for('dashboard'))
 
-# ---------------- VERIFY ----------------
+# ==========================================
+# VERIFY OTP
+# ==========================================
+
 @app.route('/verify/<file_id>', methods=['GET', 'POST'])
 def verify_otp(file_id):
-
     if 'user' not in session:
         return redirect(url_for('login'))
 
     current_user = session['user']
+    
+    # Fetch the file to ensure the current user has access
+    file_data = files_col.find_one({"file_id": file_id})
 
-    file_data = FILES_DB.get(file_id)
-
-    if not file_data or current_user not in file_data['shared_with']:
-        flash("Access denied or expired.", "error")
+    if not file_data or current_user not in file_data.get('shared_with', {}):
+        flash("Permission denied or OTP already used.", "error")
         return redirect(url_for('dashboard'))
 
     if request.method == 'POST':
-
-        user_otp = request.form.get('otp_code')
+        user_input_otp = request.form.get('otp_code')
         share_data = file_data['shared_with'][current_user]
 
-        if time.time() - share_data['timestamp'] > 120:
-            del file_data['shared_with'][current_user]
-            flash("OTP expired.", "error")
+        secret = share_data['secret']
+        algo = share_data['algo']
+        generated_time = share_data['timestamp']
+
+        # Check expiration (120 seconds)
+        if (time.time() - generated_time) > 120:
+            # Remove share access if expired
+            files_col.update_one(
+                {"file_id": file_id}, 
+                {"$unset": {f"shared_with.{current_user}": ""}}
+            )
+            flash("OTP expired after 2 minutes.", "error")
             return redirect(url_for('dashboard'))
 
-        algo = share_data['algo']
-        secret = share_data['secret']
+        is_valid = False
 
         if algo == "SHA-256":
-            valid = sha256_otp.verify_otp(secret, user_otp)
-
+            is_valid = sha256_otp.verify_otp(secret, user_input_otp)
         elif algo == "HMAC":
-            valid = hmac_otp.verify_otp(secret, user_otp, counter=1)
+            is_valid = hmac_otp.verify_otp(secret, user_input_otp, counter=1)
+        elif algo == "TOTP":
+            is_valid = totp.verify_otp(secret, user_input_otp)
 
-        else:
-            valid = totp.verify_otp(secret, user_otp)
-
-        if valid:
+        if is_valid:
+            # If successful, consume the OTP by removing the user's access mapping
+            files_col.update_one(
+                {"file_id": file_id}, 
+                {"$unset": {f"shared_with.{current_user}": ""}}
+            )
 
             enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
             dec_path = f"storage/decrypted_files/unlocked_{file_data['filename']}"
 
+            crypt_algo = file_data['algo']
             key = file_data['key']
-            crypt = file_data['algo']
 
-            if crypt == "AES-128":
+            if crypt_algo == "AES-128":
                 aes128.decrypt_file(enc_path, dec_path, key)
-
-            elif crypt == "AES-256":
+            elif crypt_algo == "AES-256":
                 aes256.decrypt_file(enc_path, dec_path, key)
-
-            else:
+            elif crypt_algo == "ChaCha20":
                 chacha20.decrypt_file(enc_path, dec_path, key)
 
-            del file_data['shared_with'][current_user]
-
             return send_file(dec_path, as_attachment=True)
-
-        flash("Invalid OTP", "error")
+        else:
+            flash("Invalid OTP.", "error")
 
     return render_template(
         'verify.html',
         file_id=file_id,
         filename=file_data['filename']
     )
-
-# ---------------- LOGOUT ----------------
-@app.route('/logout')
-def logout():
-    session.pop('user', None)
-    return redirect(url_for('login'))
 
 # ==========================================
 # ADMIN USERS
@@ -392,8 +384,30 @@ def admin_view_users():
     return jsonify(user_dict)
 
 # ==========================================
-# RUN
+# DOWNLOAD CSV RESULTS
 # ==========================================
+
+@app.route('/download-results')
+def download_results():
+    csv_path = 'results/performance_results.csv'
+    if not os.path.exists(csv_path):
+        return ("CSV file not generated yet.", 404)
+
+    return send_file(csv_path, as_attachment=True)
+
+# ==========================================
+# LOGOUT
+# ==========================================
+
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect(url_for('login'))
+
+# ==========================================
+# MAIN
+# ==========================================
+
 if __name__ == '__main__':
     print("Starting Secure Cloud Server...")
     app.run(host='0.0.0.0', port=5000, debug=False)
