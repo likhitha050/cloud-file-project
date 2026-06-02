@@ -261,22 +261,28 @@ def delete_file(file_id):
         return redirect(url_for('login'))
 
     current_user = session['user']
-
-    # Fetch the file to ensure it exists and belongs to the logged-in user
     file_data = files_col.find_one({"file_id": file_id})
 
     if not file_data:
         flash("File not found.", "error")
         return redirect(url_for('dashboard'))
 
-    # Security Check: Ensure the user trying to delete is the actual owner
     if file_data['owner'] != current_user:
         flash("Permission denied. You do not own this file.", "error")
         return redirect(url_for('dashboard'))
 
     try:
-        # 1. Delete the physical file from MongoDB Atlas GridFS
-        fs.delete(file_data['grid_id'])
+        # 1. Safely check if this is a new GridFS file
+        grid_id = file_data.get('grid_id')
+
+        if grid_id:
+            # Delete from MongoDB GridFS
+            fs.delete(grid_id)
+        else:
+            # Fallback: Delete old local file (if it was uploaded before GridFS)
+            enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
+            if os.path.exists(enc_path):
+                os.remove(enc_path)
 
         # 2. Delete the metadata record from your files collection
         files_col.delete_one({"file_id": file_id})
