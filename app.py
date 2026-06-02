@@ -10,9 +10,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from pymongo import MongoClient
 import certifi
 
-import gridfs
-from bson.binary import Binary
-
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
@@ -44,9 +41,6 @@ try:
     # Collections
     users_col = db.users
     files_col = db.files
-
-    # Initialize GridFS for large file storage
-    fs = gridfs.GridFS(db)
     print("Successfully connected to MongoDB Atlas.")
 except Exception as e:
     print(f"Failed to connect to MongoDB Atlas: {e}")
@@ -227,10 +221,6 @@ def upload_file():
             key = chacha20.generate_chacha20_key()
             chacha20.encrypt_file(temp_path, encrypted_path, key)
 
-       # Push the encrypted file into MongoDB Atlas using GridFS
-        with open(encrypted_path, 'rb') as enc_file:
-            grid_id = fs.put(enc_file, filename=f"locked_{file_id}.enc", file_id=file_id)
-
         # Store file metadata in MongoDB
         files_col.insert_one({
             'file_id': file_id,
@@ -241,9 +231,7 @@ def upload_file():
             'shared_with': {}
         })
 
-        # Clean up the physical server disk
         os.remove(temp_path)
-        os.remove(encrypted_path) # Important! Delete local encrypted copy
         flash(f"File encrypted with {algorithm} and stored.", "success")
 
     except Exception as e:
@@ -261,30 +249,27 @@ def delete_file(file_id):
         return redirect(url_for('login'))
 
     current_user = session['user']
+
+    # Fetch the file to ensure it exists and belongs to the logged-in user
     file_data = files_col.find_one({"file_id": file_id})
 
     if not file_data:
         flash("File not found.", "error")
         return redirect(url_for('dashboard'))
 
+    # Security Check: Ensure the user trying to delete is the actual owner
     if file_data['owner'] != current_user:
         flash("Permission denied. You do not own this file.", "error")
         return redirect(url_for('dashboard'))
 
     try:
-        # 1. Safely check if this is a new GridFS file
-        grid_id = file_data.get('grid_id')
+        # 1. Delete the physical encrypted file from Render storage
+        # This matches the path format you used in your upload route
+        enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
+        if os.path.exists(enc_path):
+            os.remove(enc_path)
 
-        if grid_id:
-            # Delete from MongoDB GridFS
-            fs.delete(grid_id)
-        else:
-            # Fallback: Delete old local file (if it was uploaded before GridFS)
-            enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
-            if os.path.exists(enc_path):
-                os.remove(enc_path)
-
-        # 2. Delete the metadata record from your files collection
+        # 2. Delete the file record from MongoDB Atlas
         files_col.delete_one({"file_id": file_id})
 
         flash(f"File '{file_data['filename']}' successfully deleted.", "success")
@@ -400,29 +385,18 @@ def verify_otp(file_id):
                 {"$unset": {f"shared_with.{current_user}": ""}}
             )
 
-            # Paths for temporary processing
             enc_path = f"storage/encrypted_files/locked_{file_id}.enc"
             dec_path = f"storage/decrypted_files/unlocked_{file_data['filename']}"
-
-            # 1. Retrieve the encrypted file from MongoDB GridFS
-            grid_file = fs.get(file_data['grid_id'])
-            with open(enc_path, 'wb') as f:
-                f.write(grid_file.read()) # Save it temporarily to server disk
 
             crypt_algo = file_data['algo']
             key = file_data['key']
 
-            # 2. Decrypt the file
             if crypt_algo == "AES-128":
                 aes128.decrypt_file(enc_path, dec_path, key)
             elif crypt_algo == "AES-256":
                 aes256.decrypt_file(enc_path, dec_path, key)
             elif crypt_algo == "ChaCha20":
                 chacha20.decrypt_file(enc_path, dec_path, key)
-
-            # 3. Clean up the temporary encrypted file
-            if os.path.exists(enc_path):
-                os.remove(enc_path)
 
             return send_file(dec_path, as_attachment=True)
         else:
