@@ -9,11 +9,11 @@ def generate_totp_secret():
 @measure_performance(algo_name="TOTP", operation="Generate")
 def generate_otp(secret):
     """Generates a Time-Based OTP (valid for 30 seconds) using SHA256."""
-    totp = pyotp.TOTP(secret, digest=hashlib.sha256)
+    totp = pyotp.TOTP(secret, digest=hashlib.sha256, interval=120)
     return totp.now()
 
 @measure_performance(algo_name="TOTP", operation="Verify")
 def verify_otp(secret, user_otp):
     """Verifies the TOTP code against the current time."""
-    totp = pyotp.TOTP(secret, digest=hashlib.sha256)
-    return totp.verify(user_otp)
+    totp = pyotp.TOTP(secret, digest=hashlib.sha256, interval=120)
+    return totp.verify(user_otp, valid_window=1)
