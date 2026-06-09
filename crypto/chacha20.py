@@ -1,5 +1,5 @@
 import os
-from cryptography.hazmat.primitives.ciphers.aead import Cipher, algorithms
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 from measurement import measure_performance
 
 def generate_chacha20_key():
