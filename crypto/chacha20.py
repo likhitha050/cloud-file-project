@@ -41,6 +41,3 @@ def decrypt_file(input_path, output_path, key):
         f.write(plaintext)
 
     return True
-
-
-this is my chacha20 file where do i edit it
